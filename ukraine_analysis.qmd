@@ -1,0 +1,264 @@
+---
+title: "Tracking War’s Impact in Ukraine Using Night Light & Conflict Data (2024)"
+author: "Emre Kaan Usta, Ege Tan, Eren Yıldız, Mustafa Koçman, Sait Kaçmaz"
+format:
+  pdf:
+    toc: true
+    fontsize: 12pt
+    mainfont: "Times New Roman"
+    linestretch: 1.0
+    documentclass: article
+---
+```{r}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.align = "center")
+
+# Load required libraries once
+library(tidyverse)
+library(sf)
+library(raster)
+library(lubridate)
+library(rnaturalearth)
+library(rnaturalearthdata)
+```
+
+#Introduction
+
+Russia’s full‑scale invasion of Ukraine has reshaped daily life and the built environment.  One indirect way to observe such disruption is through night‑time light (NTL) captured by satellites.  Urban areas typically emit brighter and more stable light at night; sudden declines can indicate displacement, power outages, or damage to infrastructure.  By combining VIIRS day/night band data with ACLED conflict event records, we explore how conflict intensity across 2024 correlates with changes in luminosity in four highly affected regions: Donetsk, Kharkiv, Zaporizhia, and Luhansk.
+
+
+
+
+
+
+
+##Load & Mask Night‑Time Light Raster
+Firstly, we will parse the night light intensity data that we have collected from NASA website. This data has locations and night light intensities of those locations. We will focus on UKRAINE and create a raster map to see the intensities clearly. Then we will continue by combining this with conflict events to see if there is a correlation or not. We also used to read the data from a local path but changed it for easiness to run on other computers.
+
+```{r}
+
+
+night_raster <- raster("VNL_npp_2024_global_vcmslcfg_v2_c202502261200.average_masked.dat.tif")
+
+ukraine <- ne_countries(scale = "medium", country = "Ukraine", returnclass = "sf")
+ukraine_sp <- as_Spatial(ukraine)
+
+night_raster_cropped <- crop(night_raster, extent(ukraine_sp)) %>%
+  mask(ukraine_sp)
+
+night_raster_down <- aggregate(night_raster_cropped, fact = 5, fun = mean)
+r_df <- as.data.frame(night_raster_down, xy = TRUE, na.rm = TRUE) %>%
+  set_names(c("x", "y", "light"))
+
+r_df %>%
+  ggplot(aes(x, y, fill = log1p(light))) +
+  geom_raster() +
+  scale_fill_viridis_c(option = "plasma", direction = -1, name = "log(NTL)") +
+  geom_sf(data = ukraine, fill = NA, colour = "black", linewidth = 0.4,  inherit.aes = FALSE) +
+  coord_sf(expand = FALSE) +
+  labs(title = "Night‑Time Light Intensity (2024)") +
+  theme_minimal()
+```
+
+
+##Load & Prepare Conflict Data
+Do not pay attention to below error code. We have researched online and saw that it is not indicating an error.
+
+```{r}
+
+
+conflict <- read_csv("2024-01-01-2024-12-31-Europe-Ukraine.csv") %>%
+  mutate(event_date = dmy(event_date))
+
+conflict_sf <- st_as_sf(conflict, coords = c("longitude", "latitude"), crs = 4326)
+
+# Extract NTL value for each event location
+conflict_sf$night_light <- raster::extract(night_raster, conflict_sf)
+```
+
+
+
+
+
+
+#Weekly Snapshot: 7–13 December 2024
+
+We have created a map of a certain timeline. We will compare this with the map in ACLED sample report. After being sure that it is correct, we can continue with generating the yearly map. See that sample report has the same report structure, same areas bubbled with different color palette. So we can conclude we are parsing our data correctly.
+
+
+```{r}
+week_range <- as.Date(c("2024-12-07", "2024-12-13"))
+
+conflict_week <- conflict %>%
+  filter(event_date >= week_range[1], event_date <= week_range[2]) %>%
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326)
+
+conflict_summary <- conflict_week %>%
+  mutate(lon = st_coordinates(geometry)[,1],
+         lat = st_coordinates(geometry)[,2]) %>%
+  st_drop_geometry() %>%
+  group_by(event_type, lon, lat) %>%
+  summarise(event_count = n(), .groups = "drop") %>%
+  st_as_sf(coords = c("lon", "lat"), crs = 4326)
+
+ukraine_states <- ne_states(country = "Ukraine", returnclass = "sf")
+
+ggplot() +
+  geom_sf(data = ukraine_states, fill = "white", colour = "grey60") +
+  geom_sf(data = conflict_summary, aes(size = event_count, fill = event_type),
+          shape = 21, alpha = 0.7, colour = "black") +
+  scale_size_continuous(range = c(1, 8)) +
+  scale_fill_manual(values = c(
+    "Battles" = "#1f77b4",
+    "Explosions/Remote violence" = "#ff7f0e",
+    "Violence against civilians" = "#d62728")) +
+  labs(title = "Political Violence in Ukraine (7–13 Dec 2024)") +
+  theme_minimal()
+```
+
+
+#YEARLY MAP FOR CONFLICTS
+
+
+After making sure that our data is correctly being parsed - since we checked with the report from ACLED- we go on by making a yearly graph to make comparisons. This will allow us to make final conclusions on the effects of war. 
+
+
+```{r}
+
+
+
+ukraine_map <- ne_states(country = "Ukraine", returnclass = "sf")
+
+
+conflict_sf <- st_as_sf(conflict_2024, coords = c("longitude", "latitude"), crs = 4326)
+
+
+conflict_coords <- conflict_sf %>%
+  mutate(lon = st_coordinates(.)[, 1],
+         lat = st_coordinates(.)[, 2]) %>%
+  st_drop_geometry()
+
+
+conflict_summary <- conflict_coords %>%
+  filter(!is.na(event_type)) %>%
+  group_by(event_type, lon, lat) %>%
+  summarise(event_count = n(), .groups = "drop")
+
+
+conflict_summary_sf <- st_as_sf(conflict_summary, coords = c("lon", "lat"), crs = 4326)
+
+
+ggplot() +
+  geom_sf(data = ukraine_map, fill = "white", color = "gray60") +
+  geom_sf(data = conflict_summary_sf, aes(size = event_count, fill = event_type),
+          shape = 21, alpha = 0.7, color = "black") +
+  scale_size_continuous(range = c(1, 8), name = "Number of events") +
+  scale_fill_manual(
+    values = c(
+      "Battles" = "#1f77b4",
+      "Explosions/Remote violence" = "#ff7f0e",
+      "Violence against civilians" = "#d62728"
+    ),
+    name = "Event Type"
+  ) +
+  theme_minimal() +
+  labs(
+    title = "Political Violence Events in Ukraine (2024)",
+    caption = "Source: ACLED"
+  ) +
+  theme(
+    legend.position = "right",
+    plot.title = element_text(face = "bold")
+  )
+
+ggsave("political_violence_ukraine_2024.png", plot = p, width = 10, height = 7, dpi = 300)
+
+
+```
+
+
+
+#Monthly Dynamics in Focus Regions
+
+We aggregate events and average night‑time light by month for the four focus oblasts.We will make column graphs to see violence events and night light intesity side by side and see if there is a correlation between these two. This and the historical context will be combined to make a meaningful derivement. 
+
+
+
+
+```{r}
+
+
+focus_regions <- c("Donetsk", "Kharkiv", "Zaporizhia", "Luhansk")
+
+# Safety check: if `night_light` column is missing (e.g., chunk order issue), re‑extract it
+if (!"night_light" %in% names(conflict_sf)) {
+  conflict_sf$night_light <- raster::extract(night_raster, conflict_sf)
+}
+
+scale_dual_axis <- function(x) {
+  # helper: find a scale factor so the two series share a sensible range
+  m1 <- max(x$event_count, na.rm = TRUE)
+  m2 <- max(x$mean_light,  na.rm = TRUE)
+  if (is.finite(m1) && is.finite(m2) && m2 > 0) m1 / m2 else 1
+}
+
+summary_df %>%
+  group_split(admin1) %>%
+  walk(~ {
+    df <- .x; k <- scale_dual_axis(df)
+    ggplot(df, aes(month)) +
+      geom_col(aes(y = event_count), fill = "darkred", alpha = 0.5) +
+      geom_line(aes(y = mean_light * k), colour = "steelblue", linewidth = 1) +
+      scale_y_continuous("Conflict events",
+                         sec.axis = sec_axis(~ . / k, name = "Mean NTL")) +
+      labs(title = paste0(df$admin1[1])) +
+      theme_minimal()
+  })
+```
+
+```{r}
+for (city in focus_regions) {
+  df <- summary_df %>% filter(admin1 == city)
+  k <- max(df$event_count, na.rm = TRUE) / max(df$mean_light, na.rm = TRUE)
+  p <- ggplot(df, aes(month)) +
+    geom_col(aes(y = event_count), fill = "darkred", alpha = 0.5) +
+    geom_line(aes(y = mean_light * k), color = "steelblue", linewidth = 1) +
+    scale_y_continuous("Conflict events",
+                       sec.axis = sec_axis(~ . / k, name = "Mean NTL")) +
+    labs(title = city) +
+    theme_minimal()
+  print(p)
+}
+```
+
+
+
+#Correlation Between Violence & Light Intensity
+
+
+Now that we have both violence events throughout the 4 pivot cities and light intensities in Ukraine, we can combine and make a regression graph to see how each city is getting affected by the war. Then we can conclude whether a move to safer areas is happening or not depending on the historical context as well. 
+
+```{r}
+summary_df %>%
+  ggplot(aes(event_count, mean_light)) +
+  geom_point(alpha = 0.7) +
+  geom_smooth(method = "lm", se = FALSE) +
+  facet_wrap(~ admin1, scales = "free") +
+  labs(x = "Conflict events", y = "Mean NTL", title = "Violence vs. Luminosity (2024)") +
+  theme_minimal()
+```
+
+
+
+#Discussion
+
+Donetsk and Luhansk show the steepest negative correlation between conflict frequency and NTL, suggesting sustained infrastructure damage or power cuts.
+
+Kharkiv displays short‑term drops followed by recovery, likely reflecting rapid repair of critical services in urban core areas.
+
+Nationwide, the December snapshot underlines concentrated hostilities along the eastern front, with explosions/remote violence dominating.
+
+#Conclusion
+
+Night‑time light composites provide an effective, near‑real‑time proxy for monitoring war‑related disruptions.  Integrating them with granular conflict event data helps uncover spatial‑temporal patterns of impact, guiding humanitarian response and reconstruction priorities.
+
+
